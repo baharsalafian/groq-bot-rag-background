@@ -1,0 +1,5 @@
+streamlit
+langchain-community
+groq
+PyPDF2
+unstructured
