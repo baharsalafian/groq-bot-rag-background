@@ -3,3 +3,5 @@ langchain-community
 groq
 PyPDF2
 unstructured
+faiss-cpu
+sentence-transformers
