@@ -1,26 +1,27 @@
 import os
+import json
 import streamlit as st
 from groq import Groq
-from langchain.text_splitter import CharacterTextSplitter
+from langchain_community.text_splitter import CharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, UnstructuredWordDocumentLoader
-from langchain.vectorstores import FAISS
-from langchain.embeddings import SentenceTransformerEmbeddings
-import json
+from langchain_community.vectorstores import FAISS
+from langchain_community.embeddings import SentenceTransformerEmbeddings
 
 # -----------------------
-# Session state
+# Initialize session state
 # -----------------------
 if "docs" not in st.session_state:
     st.session_state.docs = []
+
 if "history" not in st.session_state:
     st.session_state.history = []
 
 # -----------------------
-# Groq API
+# Groq API Setup (secure)
 # -----------------------
 groq_api_key = st.secrets.get("GROQ_API_KEY", None)
 if not groq_api_key:
-    st.error("❌ GROQ_API_KEY not found! Set it in Streamlit secrets.")
+    st.error("❌ GROQ_API_KEY not found! Please set it in Streamlit secrets.")
     st.stop()
 client = Groq(api_key=groq_api_key)
 
@@ -30,6 +31,7 @@ client = Groq(api_key=groq_api_key)
 if not st.session_state.docs:
     base_dir = os.path.dirname(os.path.abspath(__file__))
     resume_path = os.path.join(base_dir, "Bahareh Salafian Resume.pdf")
+
     if not os.path.exists(resume_path):
         st.error(f"❌ Resume file not found at {resume_path}")
         st.stop()
@@ -41,7 +43,7 @@ if not st.session_state.docs:
     elif resume_path.endswith(".docx"):
         loader = UnstructuredWordDocumentLoader(resume_path)
     else:
-        st.error("Unsupported resume format")
+        st.error("Unsupported resume file format")
         loader = None
 
     if loader:
@@ -58,16 +60,19 @@ if "vectorstore" not in st.session_state:
     st.session_state.vectorstore = FAISS.from_texts(st.session_state.docs, embedding_model)
 
 # -----------------------
-# Sidebar: model selection
+# Sidebar: Model selection
 # -----------------------
 st.sidebar.title("Personalization")
-available_models = ["llama-3.3-70b-versatile"]
+available_models = ["llama-3.3-70b-versatile"]  # You can add more Groq-supported models
 model = st.sidebar.selectbox("Choose a model", options=available_models)
 
 # -----------------------
-# Custom title
+# Custom Title
 # -----------------------
-st.markdown("<h1 style='text-align:center;'>💬 Ask Me Anything about Bahareh Salafian</h1>", unsafe_allow_html=True)
+st.markdown(
+    "<h1 style='text-align:center;'>💬 Ask Me Anything about Bahareh Salafian</h1>",
+    unsafe_allow_html=True
+)
 
 # -----------------------
 # Multi-turn chat & retrieval
@@ -77,7 +82,7 @@ if prompt := st.chat_input("Ask me anything about my background:"):
     docs = st.session_state.vectorstore.similarity_search(prompt, k=3)
     context_text = "\n".join([d.page_content for d in docs])
 
-    # Multi-turn context
+    # Multi-turn context (last 3 turns)
     N = 3
     history_context = ""
     if st.session_state.history:
@@ -85,7 +90,7 @@ if prompt := st.chat_input("Ask me anything about my background:"):
         for turn in last_turns:
             history_context += f"User: {turn['query']}\nAssistant: {turn['response']}\n"
 
-    # Final prompt
+    # Final prompt for LLM
     final_prompt = f"""Answer the question based on the following context:
 
 Resume context:
@@ -107,12 +112,12 @@ Question:
     except Exception as e:
         response = f"⚠️ Error calling model: {e}"
 
-    # Save response with feedback placeholder & "feedback_requested" flag
+    # Save response with feedback placeholder
     st.session_state.history.append({
         "query": prompt,
         "response": response,
         "feedback": None,
-        "feedback_requested": False  # feedback will only be shown after user confirms
+        "feedback_requested": False
     })
 
 # -----------------------
@@ -142,7 +147,7 @@ for i, message in enumerate(st.session_state.history):
                     st.error("Feedback recorded!")
 
 # -----------------------
-# Optional: Save feedback to file
+# Save feedback to file
 # -----------------------
 def save_feedback():
     with open("feedback.json", "w", encoding="utf-8") as f:
