@@ -15,7 +15,7 @@ if "history" not in st.session_state:
 
 # Groq API
 # -----------------------
-groq_api_key = "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"  # << replace with env var in production
+groq_api_key = "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"  # << replace with env var in production
 client = Groq(api_key=groq_api_key)
 
 # -----------------------
@@ -108,3 +108,4 @@ Question: {prompt}"""
     st.session_state.history[-1]["response"] = response
     with st.chat_message("assistant"):
         st.markdown(response)
+
