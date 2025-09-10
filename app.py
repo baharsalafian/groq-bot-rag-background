@@ -135,7 +135,7 @@ for i, message in enumerate(st.session_state.history):
 
         # Ask user if they are done with the answer
         if not message["feedback_requested"]:
-            if st.button("✅ I'm done with this answer", key=f"done_{i}"):
+            if st.button("✅ I'm done with my questions", key=f"done_{i}"):
                 st.session_state.history[i]["feedback_requested"] = True
 
         # Show feedback buttons only after confirmation
@@ -158,4 +158,5 @@ def save_feedback():
         json.dump(st.session_state.history, f, ensure_ascii=False, indent=4)
 
 save_feedback()
+
 
