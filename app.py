@@ -3,69 +3,35 @@ import streamlit as st
 from groq import Groq
 from langchain.text_splitter import CharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, UnstructuredWordDocumentLoader
+from langchain.vectorstores import FAISS
+from langchain.embeddings import SentenceTransformerEmbeddings
+import json
 
 # -----------------------
-# Initialize session state
+# Session state
 # -----------------------
 if "docs" not in st.session_state:
     st.session_state.docs = []
-
 if "history" not in st.session_state:
     st.session_state.history = []
 
 # -----------------------
-# Groq API Setup (secure)
+# Groq API
 # -----------------------
 groq_api_key = st.secrets.get("GROQ_API_KEY", None)
 if not groq_api_key:
-    st.error("❌ GROQ_API_KEY not found! Please set it in Streamlit secrets or environment.")
+    st.error("❌ GROQ_API_KEY not found! Set it in Streamlit secrets.")
     st.stop()
-
 client = Groq(api_key=groq_api_key)
 
 # -----------------------
-# Fetch available models dynamically
-# -----------------------
-try:
-    available_models = [m.id for m in client.models.list().data]
-except Exception as e:
-    st.error(f"⚠️ Could not fetch models: {e}")
-    st.stop()
-
-# Default model
-default_model = "llama-3.3-70b-versatile"
-if default_model not in available_models:
-    default_model = available_models[0]  # fallback if default isn't available
-
-# Sidebar: user model selection
-st.sidebar.title("Personalization")
-model = st.sidebar.selectbox(
-    "Choose a model",
-    options=available_models,
-    index=available_models.index(default_model)
-)
-
-# -----------------------
-# Custom Title
-# -----------------------
-st.markdown(
-    """
-    <h1 style='white-space: nowrap; font-size: 2.5em; font-weight: bold; text-align: center;'>
-        💬 Ask Me Anything about Bahareh Salafian
-    </h1>
-    """,
-    unsafe_allow_html=True
-)
-
-# -----------------------
-# Preload Resume Document
+# Load Resume & Split
 # -----------------------
 if not st.session_state.docs:
     base_dir = os.path.dirname(os.path.abspath(__file__))
     resume_path = os.path.join(base_dir, "Bahareh Salafian Resume.pdf")
-
     if not os.path.exists(resume_path):
-        st.error(f"❌ Resume file not found at {resume_path}. Please include it in the repo.")
+        st.error(f"❌ Resume file not found at {resume_path}")
         st.stop()
 
     if resume_path.endswith(".txt"):
@@ -75,7 +41,7 @@ if not st.session_state.docs:
     elif resume_path.endswith(".docx"):
         loader = UnstructuredWordDocumentLoader(resume_path)
     else:
-        st.error("Unsupported resume file format!")
+        st.error("Unsupported resume format")
         loader = None
 
     if loader:
@@ -85,45 +51,106 @@ if not st.session_state.docs:
             st.session_state.docs.extend(text_splitter.split_text(d.page_content))
 
 # -----------------------
-# Render chat history
+# Create embeddings + FAISS
 # -----------------------
-for message in st.session_state.history:
-    with st.chat_message("user"):
-        st.markdown(message["query"])
-    with st.chat_message("assistant"):
-        st.markdown(message["response"])
+if "vectorstore" not in st.session_state:
+    embedding_model = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
+    st.session_state.vectorstore = FAISS.from_texts(st.session_state.docs, embedding_model)
 
 # -----------------------
-# User input (chat)
+# Sidebar: model selection
+# -----------------------
+st.sidebar.title("Personalization")
+available_models = ["llama-3.3-70b-versatile"]  # simplify for now
+model = st.sidebar.selectbox("Choose a model", options=available_models)
+
+# -----------------------
+# Custom title
+# -----------------------
+st.markdown("<h1 style='text-align:center;'>💬 Ask Me Anything about Bahareh Salafian</h1>", unsafe_allow_html=True)
+
+# -----------------------
+# Multi-turn chat & retrieval
 # -----------------------
 if prompt := st.chat_input("Ask me anything about my background:"):
-    scholar_link = "https://scholar.google.com/citations?user=qDsiKcIAAAAJ&hl=en"
+    # -------------------
+    # Semantic retrieval
+    # -------------------
+    docs = st.session_state.vectorstore.similarity_search(prompt, k=3)
+    context_text = "\n".join([d.page_content for d in docs])
 
-    context_text = "\n".join(st.session_state.docs[:3])
+    # -------------------
+    # Include last N chat turns
+    # -------------------
+    N = 3  # sliding window size
+    history_context = ""
+    if st.session_state.history:
+        last_turns = st.session_state.history[-N:]
+        for turn in last_turns:
+            history_context += f"User: {turn['query']}\nAssistant: {turn['response']}\n"
+
+    # -------------------
+    # Final prompt
+    # -------------------
     final_prompt = f"""Answer the question based on the following context:
 
 Resume context:
 {context_text}
 
-Google Scholar: {scholar_link}
+Conversation history:
+{history_context}
 
-Question: {prompt}"""
+Question:
+{prompt}"""
 
-    st.session_state.history.append({"query": prompt, "response": ""})
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
-    # Groq LLM response with error handling
+    # -------------------
+    # Call Groq LLM
+    # -------------------
     try:
         chat_completion = client.chat.completions.create(
             messages=[{"role": "user", "content": final_prompt}],
-            model=model,
+            model=model
         )
         response = chat_completion.choices[0].message.content
     except Exception as e:
-        response = f"⚠️ There was an error calling the model:\n\n{e}"
+        response = f"⚠️ Error calling model: {e}"
 
-    st.session_state.history[-1]["response"] = response
+    # -------------------
+    # Update session state & include feedback placeholder
+    # -------------------
+    st.session_state.history.append({
+        "query": prompt,
+        "response": response,
+        "feedback": None  # Will store "helpful" or "not_helpful"
+    })
+
+# -----------------------
+# Render chat history with feedback buttons
+# -----------------------
+for i, message in enumerate(st.session_state.history):
+    with st.chat_message("user"):
+        st.markdown(message["query"])
     with st.chat_message("assistant"):
-        st.markdown(response)
+        st.markdown(message["response"])
 
+        # -------------------
+        # Feedback buttons
+        # -------------------
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("👍 Helpful", key=f"up_{i}"):
+                st.session_state.history[i]["feedback"] = "helpful"
+                st.success("Feedback recorded!")
+        with col2:
+            if st.button("👎 Not Helpful", key=f"down_{i}"):
+                st.session_state.history[i]["feedback"] = "not_helpful"
+                st.error("Feedback recorded!")
+
+# -----------------------
+# Optional: Save feedback to file
+# -----------------------
+def save_feedback():
+    with open("feedback.json", "w", encoding="utf-8") as f:
+        json.dump(st.session_state.history, f, ensure_ascii=False, indent=4)
+
+save_feedback()
