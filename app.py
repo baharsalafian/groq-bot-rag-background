@@ -2,11 +2,7 @@ import os
 import streamlit as st
 from groq import Groq
 from langchain.text_splitter import CharacterTextSplitter
-from langchain_community.document_loaders import (
-    PyPDFLoader,
-    TextLoader,
-    UnstructuredWordDocumentLoader,
-)
+from langchain_community.document_loaders import PyPDFLoader, TextLoader, UnstructuredWordDocumentLoader
 
 # -----------------------
 # Initialize session state
@@ -18,7 +14,7 @@ if "history" not in st.session_state:
     st.session_state.history = []
 
 # -----------------------
-# Groq API Setup (hardcoded key)
+# Groq API Setup
 # -----------------------
 groq_api_key = "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"  # << your API key here
 
@@ -29,19 +25,29 @@ if not groq_api_key:
 client = Groq(api_key=groq_api_key)
 
 # -----------------------
-# Sidebar: Model Selection
+# Fetch available models dynamically
 # -----------------------
-SUPPORTED_MODELS = {
-    "Llama3-70b-8192": "llama3-70b-8192",
-    "Mixtral-8x7b-32768": "mixtral-8x7b-32768",
-    "Gemma-7b-It": "gemma-7b-it",
-}
+try:
+    available_models = [m.id for m in client.models.list().data]
+except Exception as e:
+    st.error(f"⚠️ Could not fetch models: {e}")
+    st.stop()
+
+# Default model
+default_model = "llama-3.3-70b-versatile"
+if default_model not in available_models:
+    default_model = available_models[0]  # fallback if default isn't available
+
+# Sidebar: user model selection
 st.sidebar.title("Personalization")
-model_friendly = st.sidebar.selectbox("Choose a model", list(SUPPORTED_MODELS.keys()))
-model = SUPPORTED_MODELS[model_friendly]
+model = st.sidebar.selectbox(
+    "Choose a model",
+    options=available_models,
+    index=available_models.index(default_model)
+)
 
 # -----------------------
-# Custom Title (one line, no wrap)
+# Custom Title
 # -----------------------
 st.markdown(
     """
@@ -108,6 +114,7 @@ Question: {prompt}"""
     with st.chat_message("user"):
         st.markdown(prompt)
 
+    # Groq LLM response with error handling
     try:
         chat_completion = client.chat.completions.create(
             messages=[{"role": "user", "content": final_prompt}],
