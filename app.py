@@ -2,7 +2,11 @@ import os
 import json
 import streamlit as st
 from groq import Groq
-from langchain_community.text_splitter import CharacterTextSplitter
+
+# Text splitter from main langchain
+from langchain.text_splitter import CharacterTextSplitter
+
+# Document loaders, embeddings, vectorstores from langchain_community
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, UnstructuredWordDocumentLoader
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import SentenceTransformerEmbeddings
@@ -154,3 +158,4 @@ def save_feedback():
         json.dump(st.session_state.history, f, ensure_ascii=False, indent=4)
 
 save_feedback()
+
