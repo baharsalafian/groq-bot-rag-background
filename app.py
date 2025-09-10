@@ -61,7 +61,7 @@ if "vectorstore" not in st.session_state:
 # Sidebar: model selection
 # -----------------------
 st.sidebar.title("Personalization")
-available_models = ["llama-3.3-70b-versatile"]  # simplify for now
+available_models = ["llama-3.3-70b-versatile"]
 model = st.sidebar.selectbox("Choose a model", options=available_models)
 
 # -----------------------
@@ -73,25 +73,19 @@ st.markdown("<h1 style='text-align:center;'>💬 Ask Me Anything about Bahareh S
 # Multi-turn chat & retrieval
 # -----------------------
 if prompt := st.chat_input("Ask me anything about my background:"):
-    # -------------------
     # Semantic retrieval
-    # -------------------
     docs = st.session_state.vectorstore.similarity_search(prompt, k=3)
     context_text = "\n".join([d.page_content for d in docs])
 
-    # -------------------
-    # Include last N chat turns
-    # -------------------
-    N = 3  # sliding window size
+    # Multi-turn context
+    N = 3
     history_context = ""
     if st.session_state.history:
         last_turns = st.session_state.history[-N:]
         for turn in last_turns:
             history_context += f"User: {turn['query']}\nAssistant: {turn['response']}\n"
 
-    # -------------------
     # Final prompt
-    # -------------------
     final_prompt = f"""Answer the question based on the following context:
 
 Resume context:
@@ -103,9 +97,7 @@ Conversation history:
 Question:
 {prompt}"""
 
-    # -------------------
     # Call Groq LLM
-    # -------------------
     try:
         chat_completion = client.chat.completions.create(
             messages=[{"role": "user", "content": final_prompt}],
@@ -115,17 +107,16 @@ Question:
     except Exception as e:
         response = f"⚠️ Error calling model: {e}"
 
-    # -------------------
-    # Update session state & include feedback placeholder
-    # -------------------
+    # Save response with feedback placeholder & "feedback_requested" flag
     st.session_state.history.append({
         "query": prompt,
         "response": response,
-        "feedback": None  # Will store "helpful" or "not_helpful"
+        "feedback": None,
+        "feedback_requested": False  # feedback will only be shown after user confirms
     })
 
 # -----------------------
-# Render chat history with feedback buttons
+# Render chat history with conditional feedback
 # -----------------------
 for i, message in enumerate(st.session_state.history):
     with st.chat_message("user"):
@@ -133,18 +124,22 @@ for i, message in enumerate(st.session_state.history):
     with st.chat_message("assistant"):
         st.markdown(message["response"])
 
-        # -------------------
-        # Feedback buttons
-        # -------------------
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("👍 Helpful", key=f"up_{i}"):
-                st.session_state.history[i]["feedback"] = "helpful"
-                st.success("Feedback recorded!")
-        with col2:
-            if st.button("👎 Not Helpful", key=f"down_{i}"):
-                st.session_state.history[i]["feedback"] = "not_helpful"
-                st.error("Feedback recorded!")
+        # Ask user if they are done with the answer
+        if not message["feedback_requested"]:
+            if st.button("✅ I'm done with this answer", key=f"done_{i}"):
+                st.session_state.history[i]["feedback_requested"] = True
+
+        # Show feedback buttons only after confirmation
+        if message["feedback_requested"]:
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("👍 Helpful", key=f"up_{i}"):
+                    st.session_state.history[i]["feedback"] = "helpful"
+                    st.success("Feedback recorded!")
+            with col2:
+                if st.button("👎 Not Helpful", key=f"down_{i}"):
+                    st.session_state.history[i]["feedback"] = "not_helpful"
+                    st.error("Feedback recorded!")
 
 # -----------------------
 # Optional: Save feedback to file
