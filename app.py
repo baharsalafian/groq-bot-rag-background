@@ -14,12 +14,11 @@ if "history" not in st.session_state:
     st.session_state.history = []
 
 # -----------------------
-# Groq API Setup
+# Groq API Setup (secure)
 # -----------------------
-groq_api_key = "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"  # << your API key here
-
+groq_api_key = st.secrets.get("GROQ_API_KEY", None)
 if not groq_api_key:
-    st.error("❌ GROQ_API_KEY is missing! Please provide a valid key.")
+    st.error("❌ GROQ_API_KEY not found! Please set it in Streamlit secrets or environment.")
     st.stop()
 
 client = Groq(api_key=groq_api_key)
@@ -127,3 +126,4 @@ Question: {prompt}"""
     st.session_state.history[-1]["response"] = response
     with st.chat_message("assistant"):
         st.markdown(response)
+
