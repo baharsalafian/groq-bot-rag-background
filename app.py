@@ -30,7 +30,7 @@ if not groq_api_key:
 client = Groq(api_key=groq_api_key)
 
 # -----------------------
-# Load Resume & Split
+# Load Resume & Links & Split
 # -----------------------
 if not st.session_state.docs:
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -55,6 +55,13 @@ if not st.session_state.docs:
         text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=50)
         for d in loaded_docs:
             st.session_state.docs.extend(text_splitter.split_text(d.page_content))
+
+    # ✅ Add LinkedIn and Google Scholar links as extra searchable context
+    additional_links = [
+        "LinkedIn Profile: https://www.linkedin.com/in/bahareh-salafian/",
+        "Google Scholar Profile: https://scholar.google.com/citations?user=qDsiKcIAAAAJ&hl=en"
+    ]
+    st.session_state.docs.extend(additional_links)
 
 # -----------------------
 # Create embeddings + FAISS
@@ -158,5 +165,3 @@ def save_feedback():
         json.dump(st.session_state.history, f, ensure_ascii=False, indent=4)
 
 save_feedback()
-
-
