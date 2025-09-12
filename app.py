@@ -32,6 +32,24 @@ if not groq_api_key:
 client = Groq(api_key=groq_api_key)
 
 # -----------------------
+# Helper: Fetch Groq models safely
+# -----------------------
+@st.cache_data(ttl=3600)
+def get_groq_models():
+    try:
+        groq_models = client.models.list()  # Fetch all available models
+        model_names = []
+        for m in groq_models:
+            if isinstance(m, dict) and "name" in m:
+                model_names.append(m["name"])
+            elif isinstance(m, (list, tuple)) and len(m) > 0:
+                model_names.append(m[0])
+        return model_names or ["llama-3.3-70b-versatile"]
+    except Exception as e:
+        st.warning(f"⚠️ Could not fetch models from Groq: {e}")
+        return ["llama-3.3-70b-versatile"]
+
+# -----------------------
 # Load Resume + LinkedIn PDF + Scholar Data (with tags)
 # -----------------------
 if not st.session_state.docs:
@@ -71,14 +89,12 @@ if not st.session_state.docs:
     try:
         author = scholarly.search_author_id("qDsiKcIAAAAJ")
         author_filled = scholarly.fill(author, sections=["publications"])
-
         for pub in author_filled["publications"]:
             title = pub["bib"]["title"]
             year = pub["bib"].get("pub_year", "N/A")
             venue = pub["bib"].get("venue", "N/A")
             text = f"Publication: {title}, Year: {year}, Venue: {venue}"
             st.session_state.docs.append(Document(page_content=text, metadata={"source": "scholar"}))
-
         st.info("✅ Google Scholar publications loaded successfully!")
     except Exception as e:
         st.warning(f"⚠️ Could not fetch Google Scholar publications automatically: {e}")
@@ -95,19 +111,9 @@ if "vectorstore" not in st.session_state:
     st.session_state.vectorstore = FAISS.from_documents(st.session_state.docs, embedding_model)
 
 # -----------------------
-# Sidebar: Model selection (fetch all available Groq models)
+# Sidebar: Model selection
 # -----------------------
 st.sidebar.title("Personalization")
-
-@st.cache_data(ttl=3600)  # Cache for 1 hour
-def get_groq_models():
-    try:
-        groq_models = client.models.list()  # Fetch all available models
-        return [m["name"] for m in groq_models]
-    except Exception as e:
-        st.warning(f"⚠️ Could not fetch models from Groq: {e}")
-        return ["llama-3.3-70b-versatile"]  # fallback
-
 available_models = get_groq_models()
 model = st.sidebar.selectbox("Choose a model", options=available_models)
 
