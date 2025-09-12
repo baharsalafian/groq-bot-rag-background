@@ -4,15 +4,11 @@ import streamlit as st
 from groq import Groq
 from scholarly import scholarly  # For Google Scholar scraping
 
-# Text splitter from main langchain
 from langchain.text_splitter import CharacterTextSplitter
-
-# Document loaders, embeddings, vectorstores from langchain_community
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import SentenceTransformerEmbeddings
-from langchain.schema import Document  # For adding metadata
-
+from langchain.schema import Document
 
 # -----------------------
 # Initialize session state
@@ -33,13 +29,13 @@ if not groq_api_key:
 client = Groq(api_key=groq_api_key)
 
 # -----------------------
-# Load Resume + LinkedIn PDF + Scholar Data (with tags)
+# Load Resume + LinkedIn PDF + Scholar Data
 # -----------------------
 if not st.session_state.docs:
     base_dir = os.path.dirname(os.path.abspath(__file__))
     text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=50)
 
-    # ✅ Load Resume
+    # Resume
     resume_path = os.path.join(base_dir, "Bahareh Salafian Resume.pdf")
     if not os.path.exists(resume_path):
         st.error(f"❌ Resume file not found at {resume_path}")
@@ -52,7 +48,7 @@ if not st.session_state.docs:
         for c in chunks:
             st.session_state.docs.append(Document(page_content=c, metadata={"source": "resume"}))
 
-    # ✅ Load LinkedIn PDF if available
+    # LinkedIn PDF
     linkedin_path = os.path.join(base_dir, "linkedin_profile.pdf")
     if os.path.exists(linkedin_path):
         try:
@@ -66,26 +62,26 @@ if not st.session_state.docs:
         except Exception as e:
             st.warning(f"⚠️ Could not load LinkedIn PDF: {e}")
     else:
-        st.info("ℹ️ LinkedIn profile PDF not found. Place 'linkedin_profile.pdf' in the same folder to include it.")
+        st.info("ℹ️ LinkedIn profile PDF not found.")
 
-    # ✅ Add Google Scholar profile + fetch publications dynamically
+    # Google Scholar
     try:
         author = scholarly.search_author_id("qDsiKcIAAAAJ")
         author_filled = scholarly.fill(author, sections=["publications"])
-
         for pub in author_filled["publications"]:
             title = pub["bib"]["title"]
             year = pub["bib"].get("pub_year", "N/A")
             venue = pub["bib"].get("venue", "N/A")
             text = f"Publication: {title}, Year: {year}, Venue: {venue}"
             st.session_state.docs.append(Document(page_content=text, metadata={"source": "scholar"}))
-
         st.info("✅ Google Scholar publications loaded successfully!")
     except Exception as e:
         st.warning(f"⚠️ Could not fetch Google Scholar publications automatically: {e}")
         st.session_state.docs.append(
-            Document(page_content="Google Scholar Profile: https://scholar.google.com/citations?user=qDsiKcIAAAAJ&hl=en",
-                     metadata={"source": "scholar"})
+            Document(
+                page_content="Google Scholar Profile: https://scholar.google.com/citations?user=qDsiKcIAAAAJ&hl=en",
+                metadata={"source": "scholar"}
+            )
         )
 
 # -----------------------
@@ -105,10 +101,7 @@ model = st.sidebar.selectbox("Choose a model", options=available_models)
 # -----------------------
 # Custom Title
 # -----------------------
-st.markdown(
-    "<h1 style='text-align:center;'>💬 Ask Me Anything about Bahareh Salafian</h1>",
-    unsafe_allow_html=True
-)
+st.markdown("<h1 style='text-align:center;'>💬 Ask Me Anything about Bahareh Salafian</h1>", unsafe_allow_html=True)
 
 # -----------------------
 # Multi-turn chat & retrieval
@@ -116,11 +109,9 @@ st.markdown(
 if prompt := st.chat_input("Ask me anything about my background:"):
     # Semantic retrieval
     docs = st.session_state.vectorstore.similarity_search(prompt, k=3)
-
-    # Combine context with source tags
     context_text = "\n".join([f"[Source: {d.metadata['source']}] {d.page_content}" for d in docs])
 
-    # Multi-turn context (last 3 turns)
+    # Multi-turn context
     N = 3
     history_context = ""
     if st.session_state.history:
@@ -128,7 +119,7 @@ if prompt := st.chat_input("Ask me anything about my background:"):
         for turn in last_turns:
             history_context += f"User: {turn['query']}\nAssistant: {turn['response']}\n"
 
-    # Final prompt for LLM
+    # Final prompt
     final_prompt = f"""Answer the question based on the following context.
 Always mention the source when relevant (Resume, LinkedIn, or Google Scholar).
 
@@ -151,15 +142,15 @@ Question:
     except Exception as e:
         response = f"⚠️ Error calling model: {e}"
 
+    # Append to history with feedback
     st.session_state.history.append({
         "query": prompt,
         "response": response,
-        "feedback": None,
-        "feedback_requested": False
+        "feedback": None
     })
 
 # -----------------------
-# Render chat history with conditional feedback
+# Render chat history with feedback buttons
 # -----------------------
 for i, message in enumerate(st.session_state.history):
     with st.chat_message("user"):
@@ -167,20 +158,16 @@ for i, message in enumerate(st.session_state.history):
     with st.chat_message("assistant"):
         st.markdown(message["response"])
 
-        if not message["feedback_requested"]:
-            if st.button("✅ I'm done with my questions", key=f"done_{i}"):
-                st.session_state.history[i]["feedback_requested"] = True
-
-        if message["feedback_requested"]:
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("👍 Helpful", key=f"up_{i}"):
-                    st.session_state.history[i]["feedback"] = "helpful"
-                    st.success("Feedback recorded!")
-            with col2:
-                if st.button("👎 Not Helpful", key=f"down_{i}"):
-                    st.session_state.history[i]["feedback"] = "not_helpful"
-                    st.error("Feedback recorded!")
+        # Feedback buttons directly after each response
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("👍 Helpful", key=f"up_{i}"):
+                st.session_state.history[i]["feedback"] = "helpful"
+                st.success("Feedback recorded!")
+        with col2:
+            if st.button("👎 Not Helpful", key=f"down_{i}"):
+                st.session_state.history[i]["feedback"] = "not_helpful"
+                st.error("Feedback recorded!")
 
 # -----------------------
 # Save feedback to file
