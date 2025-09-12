@@ -13,7 +13,6 @@ from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain.schema import Document  # For adding metadata
 
-
 # -----------------------
 # Initialize session state
 # -----------------------
@@ -96,10 +95,20 @@ if "vectorstore" not in st.session_state:
     st.session_state.vectorstore = FAISS.from_documents(st.session_state.docs, embedding_model)
 
 # -----------------------
-# Sidebar: Model selection
+# Sidebar: Model selection (fetch all available Groq models)
 # -----------------------
 st.sidebar.title("Personalization")
-available_models = ["llama-3.3-70b-versatile"]
+
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+def get_groq_models():
+    try:
+        groq_models = client.models.list()  # Fetch all available models
+        return [m["name"] for m in groq_models]
+    except Exception as e:
+        st.warning(f"⚠️ Could not fetch models from Groq: {e}")
+        return ["llama-3.3-70b-versatile"]  # fallback
+
+available_models = get_groq_models()
 model = st.sidebar.selectbox("Choose a model", options=available_models)
 
 # -----------------------
