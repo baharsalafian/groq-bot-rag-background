@@ -2,23 +2,13 @@ import os
 import json
 import streamlit as st
 from groq import Groq
-from scholarly import scholarly
+from scholarly import scholarly  # For Google Scholar scraping
 
 from langchain.text_splitter import CharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain.schema import Document
-
-# -----------------------
-# Google Drive Authentication
-# -----------------------
-from pydrive.auth import GoogleAuth
-from pydrive.drive import GoogleDrive
-
-gauth = GoogleAuth()
-gauth.LocalWebserverAuth()  # Opens browser for authentication
-drive = GoogleDrive(gauth)
 
 # -----------------------
 # Initialize session state
@@ -117,6 +107,7 @@ st.markdown("<h1 style='text-align:center;'>💬 Ask Me Anything about Bahareh S
 # Multi-turn chat & retrieval
 # -----------------------
 if prompt := st.chat_input("Ask me anything about my background:"):
+    # Semantic retrieval
     docs = st.session_state.vectorstore.similarity_search(prompt, k=3)
     context_text = "\n".join([f"[Source: {d.metadata['source']}] {d.page_content}" for d in docs])
 
@@ -128,6 +119,7 @@ if prompt := st.chat_input("Ask me anything about my background:"):
         for turn in last_turns:
             history_context += f"User: {turn['query']}\nAssistant: {turn['response']}\n"
 
+    # Final prompt
     final_prompt = f"""Answer the question based on the following context.
 Always mention the source when relevant (Resume, LinkedIn, or Google Scholar).
 
@@ -140,6 +132,7 @@ Conversation history:
 Question:
 {prompt}"""
 
+    # Call Groq LLM
     try:
         chat_completion = client.chat.completions.create(
             messages=[{"role": "user", "content": final_prompt}],
@@ -149,6 +142,7 @@ Question:
     except Exception as e:
         response = f"⚠️ Error calling model: {e}"
 
+    # Append to history with feedback
     st.session_state.history.append({
         "query": prompt,
         "response": response,
@@ -170,28 +164,16 @@ for i, message in enumerate(st.session_state.history):
             if st.button("👍 Helpful", key=f"up_{i}"):
                 st.session_state.history[i]["feedback"] = "helpful"
                 st.success("Feedback recorded!")
-                save_feedback_to_drive()
         with col2:
             if st.button("👎 Not Helpful", key=f"down_{i}"):
                 st.session_state.history[i]["feedback"] = "not_helpful"
                 st.error("Feedback recorded!")
-                save_feedback_to_drive()
 
 # -----------------------
-# Save feedback to Google Drive
+# Save feedback to file
 # -----------------------
-def save_feedback_to_drive():
-    local_path = "feedback.json"
-    with open(local_path, "w", encoding="utf-8") as f:
+def save_feedback():
+    with open("feedback.json", "w", encoding="utf-8") as f:
         json.dump(st.session_state.history, f, ensure_ascii=False, indent=4)
 
-    # Check if file exists on Drive
-    file_list = drive.ListFile({'q': "title='feedback.json'"}).GetList()
-    if file_list:
-        gfile = file_list[0]
-        gfile.SetContentFile(local_path)
-        gfile.Upload()
-    else:
-        gfile = drive.CreateFile({'title': 'feedback.json'})
-        gfile.SetContentFile(local_path)
-        gfile.Upload()
+save_feedback()
