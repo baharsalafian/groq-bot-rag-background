@@ -2,14 +2,17 @@ import os
 import json
 import streamlit as st
 from groq import Groq
+from scholarly import scholarly  # For Google Scholar scraping
 
 # Text splitter from main langchain
 from langchain.text_splitter import CharacterTextSplitter
 
 # Document loaders, embeddings, vectorstores from langchain_community
-from langchain_community.document_loaders import PyPDFLoader, TextLoader, UnstructuredWordDocumentLoader
+from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import SentenceTransformerEmbeddings
+from langchain.schema import Document  # For adding metadata
+
 
 # -----------------------
 # Initialize session state
@@ -21,7 +24,7 @@ if "history" not in st.session_state:
     st.session_state.history = []
 
 # -----------------------
-# Groq API Setup (secure)
+# Groq API Setup
 # -----------------------
 groq_api_key = st.secrets.get("GROQ_API_KEY", None)
 if not groq_api_key:
@@ -30,51 +33,73 @@ if not groq_api_key:
 client = Groq(api_key=groq_api_key)
 
 # -----------------------
-# Load Resume & Links & Split
+# Load Resume + LinkedIn PDF + Scholar Data (with tags)
 # -----------------------
 if not st.session_state.docs:
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    resume_path = os.path.join(base_dir, "Bahareh Salafian Resume.pdf")
+    text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=50)
 
+    # ✅ Load Resume
+    resume_path = os.path.join(base_dir, "Bahareh Salafian Resume.pdf")
     if not os.path.exists(resume_path):
         st.error(f"❌ Resume file not found at {resume_path}")
         st.stop()
 
-    if resume_path.endswith(".txt"):
-        loader = TextLoader(resume_path, encoding="utf-8")
-    elif resume_path.endswith(".pdf"):
-        loader = PyPDFLoader(resume_path)
-    elif resume_path.endswith(".docx"):
-        loader = UnstructuredWordDocumentLoader(resume_path)
+    resume_loader = PyPDFLoader(resume_path)
+    resume_docs = resume_loader.load()
+    for d in resume_docs:
+        chunks = text_splitter.split_text(d.page_content)
+        for c in chunks:
+            st.session_state.docs.append(Document(page_content=c, metadata={"source": "resume"}))
+
+    # ✅ Load LinkedIn PDF if available
+    linkedin_path = os.path.join(base_dir, "linkedin_profile.pdf")
+    if os.path.exists(linkedin_path):
+        try:
+            linkedin_loader = PyPDFLoader(linkedin_path)
+            linkedin_docs = linkedin_loader.load()
+            for d in linkedin_docs:
+                chunks = text_splitter.split_text(d.page_content)
+                for c in chunks:
+                    st.session_state.docs.append(Document(page_content=c, metadata={"source": "linkedin"}))
+            st.info("✅ LinkedIn profile PDF loaded successfully!")
+        except Exception as e:
+            st.warning(f"⚠️ Could not load LinkedIn PDF: {e}")
     else:
-        st.error("Unsupported resume file format")
-        loader = None
+        st.info("ℹ️ LinkedIn profile PDF not found. Place 'linkedin_profile.pdf' in the same folder to include it.")
 
-    if loader:
-        loaded_docs = loader.load()
-        text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=50)
-        for d in loaded_docs:
-            st.session_state.docs.extend(text_splitter.split_text(d.page_content))
+    # ✅ Add Google Scholar profile + fetch publications dynamically
+    try:
+        author = scholarly.search_author_id("qDsiKcIAAAAJ")
+        author_filled = scholarly.fill(author, sections=["publications"])
 
-    # ✅ Add LinkedIn and Google Scholar links as extra searchable context
-    additional_links = [
-        "LinkedIn Profile: https://www.linkedin.com/in/bahareh-salafian/",
-        "Google Scholar Profile: https://scholar.google.com/citations?user=qDsiKcIAAAAJ&hl=en"
-    ]
-    st.session_state.docs.extend(additional_links)
+        for pub in author_filled["publications"]:
+            title = pub["bib"]["title"]
+            year = pub["bib"].get("pub_year", "N/A")
+            venue = pub["bib"].get("venue", "N/A")
+            text = f"Publication: {title}, Year: {year}, Venue: {venue}"
+            st.session_state.docs.append(Document(page_content=text, metadata={"source": "scholar"}))
+
+        st.info("✅ Google Scholar publications loaded successfully!")
+    except Exception as e:
+        st.warning(f"⚠️ Could not fetch Google Scholar publications automatically: {e}")
+        st.session_state.docs.append(
+            Document(page_content="Google Scholar Profile: https://scholar.google.com/citations?user=qDsiKcIAAAAJ&hl=en",
+                     metadata={"source": "scholar"})
+        )
 
 # -----------------------
 # Create embeddings + FAISS
 # -----------------------
 if "vectorstore" not in st.session_state:
     embedding_model = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
-    st.session_state.vectorstore = FAISS.from_texts(st.session_state.docs, embedding_model)
+    st.session_state.vectorstore = FAISS.from_documents(st.session_state.docs, embedding_model)
 
 # -----------------------
 # Sidebar: Model selection
 # -----------------------
 st.sidebar.title("Personalization")
-available_models = ["llama-3.3-70b-versatile"]  # You can add more Groq-supported models
+available_models = ["llama-3.3-70b-versatile"]
 model = st.sidebar.selectbox("Choose a model", options=available_models)
 
 # -----------------------
@@ -91,7 +116,9 @@ st.markdown(
 if prompt := st.chat_input("Ask me anything about my background:"):
     # Semantic retrieval
     docs = st.session_state.vectorstore.similarity_search(prompt, k=3)
-    context_text = "\n".join([d.page_content for d in docs])
+
+    # Combine context with source tags
+    context_text = "\n".join([f"[Source: {d.metadata['source']}] {d.page_content}" for d in docs])
 
     # Multi-turn context (last 3 turns)
     N = 3
@@ -102,9 +129,10 @@ if prompt := st.chat_input("Ask me anything about my background:"):
             history_context += f"User: {turn['query']}\nAssistant: {turn['response']}\n"
 
     # Final prompt for LLM
-    final_prompt = f"""Answer the question based on the following context:
+    final_prompt = f"""Answer the question based on the following context.
+Always mention the source when relevant (Resume, LinkedIn, or Google Scholar).
 
-Resume context:
+Context:
 {context_text}
 
 Conversation history:
@@ -123,7 +151,6 @@ Question:
     except Exception as e:
         response = f"⚠️ Error calling model: {e}"
 
-    # Save response with feedback placeholder
     st.session_state.history.append({
         "query": prompt,
         "response": response,
@@ -140,12 +167,10 @@ for i, message in enumerate(st.session_state.history):
     with st.chat_message("assistant"):
         st.markdown(message["response"])
 
-        # Ask user if they are done with the answer
         if not message["feedback_requested"]:
             if st.button("✅ I'm done with my questions", key=f"done_{i}"):
                 st.session_state.history[i]["feedback_requested"] = True
 
-        # Show feedback buttons only after confirmation
         if message["feedback_requested"]:
             col1, col2 = st.columns(2)
             with col1:
