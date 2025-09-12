@@ -3,11 +3,16 @@ import json
 import streamlit as st
 from groq import Groq
 from scholarly import scholarly  # For Google Scholar scraping
+
+# Text splitter from main langchain
 from langchain.text_splitter import CharacterTextSplitter
+
+# Document loaders, embeddings, vectorstores from langchain_community
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import SentenceTransformerEmbeddings
-from langchain.schema import Document
+from langchain.schema import Document  # For adding metadata
+
 
 # -----------------------
 # Initialize session state
@@ -28,35 +33,13 @@ if not groq_api_key:
 client = Groq(api_key=groq_api_key)
 
 # -----------------------
-# Function to fetch model names safely
-# -----------------------
-@st.cache_data(ttl=3600)
-def get_groq_models():
-    try:
-        groq_models = client.models.list()
-        model_names = []
-
-        for m in groq_models:
-            # Convert model object to dictionary if possible
-            m_dict = m.__dict__ if hasattr(m, "__dict__") else m
-            if isinstance(m_dict, dict) and "name" in m_dict:
-                model_names.append(m_dict["name"])
-            elif hasattr(m, "name"):
-                model_names.append(m.name)
-
-        return model_names or ["llama-3.3-70b-versatile"]
-    except Exception as e:
-        st.warning(f"⚠️ Could not fetch models from Groq: {e}")
-        return ["llama-3.3-70b-versatile"]
-
-# -----------------------
 # Load Resume + LinkedIn PDF + Scholar Data (with tags)
 # -----------------------
 if not st.session_state.docs:
     base_dir = os.path.dirname(os.path.abspath(__file__))
     text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=50)
 
-    # Load Resume
+    # ✅ Load Resume
     resume_path = os.path.join(base_dir, "Bahareh Salafian Resume.pdf")
     if not os.path.exists(resume_path):
         st.error(f"❌ Resume file not found at {resume_path}")
@@ -69,7 +52,7 @@ if not st.session_state.docs:
         for c in chunks:
             st.session_state.docs.append(Document(page_content=c, metadata={"source": "resume"}))
 
-    # Load LinkedIn PDF if available
+    # ✅ Load LinkedIn PDF if available
     linkedin_path = os.path.join(base_dir, "linkedin_profile.pdf")
     if os.path.exists(linkedin_path):
         try:
@@ -85,24 +68,24 @@ if not st.session_state.docs:
     else:
         st.info("ℹ️ LinkedIn profile PDF not found. Place 'linkedin_profile.pdf' in the same folder to include it.")
 
-    # Add Google Scholar profile
+    # ✅ Add Google Scholar profile + fetch publications dynamically
     try:
         author = scholarly.search_author_id("qDsiKcIAAAAJ")
         author_filled = scholarly.fill(author, sections=["publications"])
+
         for pub in author_filled["publications"]:
             title = pub["bib"]["title"]
             year = pub["bib"].get("pub_year", "N/A")
             venue = pub["bib"].get("venue", "N/A")
             text = f"Publication: {title}, Year: {year}, Venue: {venue}"
             st.session_state.docs.append(Document(page_content=text, metadata={"source": "scholar"}))
+
         st.info("✅ Google Scholar publications loaded successfully!")
     except Exception as e:
         st.warning(f"⚠️ Could not fetch Google Scholar publications automatically: {e}")
         st.session_state.docs.append(
-            Document(
-                page_content="Google Scholar Profile: https://scholar.google.com/citations?user=qDsiKcIAAAAJ&hl=en",
-                metadata={"source": "scholar"}
-            )
+            Document(page_content="Google Scholar Profile: https://scholar.google.com/citations?user=qDsiKcIAAAAJ&hl=en",
+                     metadata={"source": "scholar"})
         )
 
 # -----------------------
@@ -116,7 +99,7 @@ if "vectorstore" not in st.session_state:
 # Sidebar: Model selection
 # -----------------------
 st.sidebar.title("Personalization")
-available_models = get_groq_models()
+available_models = ["llama-3.3-70b-versatile"]
 model = st.sidebar.selectbox("Choose a model", options=available_models)
 
 # -----------------------
@@ -133,6 +116,8 @@ st.markdown(
 if prompt := st.chat_input("Ask me anything about my background:"):
     # Semantic retrieval
     docs = st.session_state.vectorstore.similarity_search(prompt, k=3)
+
+    # Combine context with source tags
     context_text = "\n".join([f"[Source: {d.metadata['source']}] {d.page_content}" for d in docs])
 
     # Multi-turn context (last 3 turns)
@@ -143,7 +128,7 @@ if prompt := st.chat_input("Ask me anything about my background:"):
         for turn in last_turns:
             history_context += f"User: {turn['query']}\nAssistant: {turn['response']}\n"
 
-    # Final prompt
+    # Final prompt for LLM
     final_prompt = f"""Answer the question based on the following context.
 Always mention the source when relevant (Resume, LinkedIn, or Google Scholar).
 
@@ -166,7 +151,6 @@ Question:
     except Exception as e:
         response = f"⚠️ Error calling model: {e}"
 
-    # Update session state
     st.session_state.history.append({
         "query": prompt,
         "response": response,
@@ -175,7 +159,7 @@ Question:
     })
 
 # -----------------------
-# Render chat history with feedback
+# Render chat history with conditional feedback
 # -----------------------
 for i, message in enumerate(st.session_state.history):
     with st.chat_message("user"):
