@@ -4,88 +4,88 @@ import streamlit as st
 from groq import Groq
 from scholarly import scholarly  # For Google Scholar scraping
 from langchain.text_splitter import CharacterTextSplitter
-from langchain_community.document_loaders import PyPDFLoader, TextLoader, UnstructuredWordDocumentLoader
+from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain.schema import Document
 
 # -----------------------
-# Session state
+# Initialize session state
 # -----------------------
 if "docs" not in st.session_state:
     st.session_state.docs = []
+
 if "history" not in st.session_state:
     st.session_state.history = []
 
 # -----------------------
-# Groq API
+# Groq API Setup
 # -----------------------
 groq_api_key = st.secrets.get("GROQ_API_KEY", None)
 if not groq_api_key:
-    st.error("❌ GROQ_API_KEY not found! Set it in Streamlit secrets.")
+    st.error("❌ GROQ_API_KEY not found! Please set it in Streamlit secrets.")
     st.stop()
 client = Groq(api_key=groq_api_key)
 
 # -----------------------
-# Helper: Fetch Groq models safely
+# Function to fetch model names safely
 # -----------------------
 @st.cache_data(ttl=3600)
 def get_groq_models():
     try:
         groq_models = client.models.list()
         model_names = []
+
         for m in groq_models:
-            if isinstance(m, dict) and "name" in m:
-                model_names.append(m["name"])
-            elif isinstance(m, (list, tuple)) and len(m) > 0:
-                model_names.append(m[0])
+            # Convert model object to dictionary if possible
+            m_dict = m.__dict__ if hasattr(m, "__dict__") else m
+            if isinstance(m_dict, dict) and "name" in m_dict:
+                model_names.append(m_dict["name"])
+            elif hasattr(m, "name"):
+                model_names.append(m.name)
+
         return model_names or ["llama-3.3-70b-versatile"]
     except Exception as e:
         st.warning(f"⚠️ Could not fetch models from Groq: {e}")
         return ["llama-3.3-70b-versatile"]
 
 # -----------------------
-# Load Resume + LinkedIn + Scholar
+# Load Resume + LinkedIn PDF + Scholar Data (with tags)
 # -----------------------
 if not st.session_state.docs:
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    # Resume
+    text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=50)
+
+    # Load Resume
     resume_path = os.path.join(base_dir, "Bahareh Salafian Resume.pdf")
     if not os.path.exists(resume_path):
         st.error(f"❌ Resume file not found at {resume_path}")
         st.stop()
-    if resume_path.endswith(".txt"):
-        loader = TextLoader(resume_path, encoding="utf-8")
-    elif resume_path.endswith(".pdf"):
-        loader = PyPDFLoader(resume_path)
-    elif resume_path.endswith(".docx"):
-        loader = UnstructuredWordDocumentLoader(resume_path)
-    else:
-        st.error("Unsupported resume format")
-        loader = None
-    if loader:
-        loaded_docs = loader.load()
-        text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=50)
-        for d in loaded_docs:
-            chunks = text_splitter.split_text(d.page_content)
-            for c in chunks:
-                st.session_state.docs.append(Document(page_content=c, metadata={"source": "resume"}))
 
-    # LinkedIn PDF
+    resume_loader = PyPDFLoader(resume_path)
+    resume_docs = resume_loader.load()
+    for d in resume_docs:
+        chunks = text_splitter.split_text(d.page_content)
+        for c in chunks:
+            st.session_state.docs.append(Document(page_content=c, metadata={"source": "resume"}))
+
+    # Load LinkedIn PDF if available
     linkedin_path = os.path.join(base_dir, "linkedin_profile.pdf")
     if os.path.exists(linkedin_path):
         try:
-            loader = PyPDFLoader(linkedin_path)
-            docs = loader.load()
-            for d in docs:
+            linkedin_loader = PyPDFLoader(linkedin_path)
+            linkedin_docs = linkedin_loader.load()
+            for d in linkedin_docs:
                 chunks = text_splitter.split_text(d.page_content)
                 for c in chunks:
                     st.session_state.docs.append(Document(page_content=c, metadata={"source": "linkedin"}))
             st.info("✅ LinkedIn profile PDF loaded successfully!")
         except Exception as e:
             st.warning(f"⚠️ Could not load LinkedIn PDF: {e}")
+    else:
+        st.info("ℹ️ LinkedIn profile PDF not found. Place 'linkedin_profile.pdf' in the same folder to include it.")
 
-    # Google Scholar
+    # Add Google Scholar profile
     try:
         author = scholarly.search_author_id("qDsiKcIAAAAJ")
         author_filled = scholarly.fill(author, sections=["publications"])
@@ -99,12 +99,14 @@ if not st.session_state.docs:
     except Exception as e:
         st.warning(f"⚠️ Could not fetch Google Scholar publications automatically: {e}")
         st.session_state.docs.append(
-            Document(page_content="Google Scholar Profile: https://scholar.google.com/citations?user=qDsiKcIAAAAJ&hl=en",
-                     metadata={"source": "scholar"})
+            Document(
+                page_content="Google Scholar Profile: https://scholar.google.com/citations?user=qDsiKcIAAAAJ&hl=en",
+                metadata={"source": "scholar"}
+            )
         )
 
 # -----------------------
-# Embeddings + FAISS
+# Create embeddings + FAISS
 # -----------------------
 if "vectorstore" not in st.session_state:
     embedding_model = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
@@ -118,25 +120,32 @@ available_models = get_groq_models()
 model = st.sidebar.selectbox("Choose a model", options=available_models)
 
 # -----------------------
-# Custom title
+# Custom Title
 # -----------------------
-st.markdown("<h1 style='text-align:center;'>💬 Ask Me Anything about Bahareh Salafian</h1>", unsafe_allow_html=True)
+st.markdown(
+    "<h1 style='text-align:center;'>💬 Ask Me Anything about Bahareh Salafian</h1>",
+    unsafe_allow_html=True
+)
 
 # -----------------------
 # Multi-turn chat & retrieval
 # -----------------------
 if prompt := st.chat_input("Ask me anything about my background:"):
+    # Semantic retrieval
     docs = st.session_state.vectorstore.similarity_search(prompt, k=3)
     context_text = "\n".join([f"[Source: {d.metadata['source']}] {d.page_content}" for d in docs])
 
-    N = 3  # last N turns
+    # Multi-turn context (last 3 turns)
+    N = 3
     history_context = ""
     if st.session_state.history:
         last_turns = st.session_state.history[-N:]
         for turn in last_turns:
             history_context += f"User: {turn['query']}\nAssistant: {turn['response']}\n"
 
-    final_prompt = f"""Answer the question based on the following context:
+    # Final prompt
+    final_prompt = f"""Answer the question based on the following context.
+Always mention the source when relevant (Resume, LinkedIn, or Google Scholar).
 
 Context:
 {context_text}
@@ -147,6 +156,7 @@ Conversation history:
 Question:
 {prompt}"""
 
+    # Call Groq LLM
     try:
         chat_completion = client.chat.completions.create(
             messages=[{"role": "user", "content": final_prompt}],
@@ -156,32 +166,40 @@ Question:
     except Exception as e:
         response = f"⚠️ Error calling model: {e}"
 
+    # Update session state
     st.session_state.history.append({
         "query": prompt,
         "response": response,
-        "feedback": None
+        "feedback": None,
+        "feedback_requested": False
     })
 
 # -----------------------
-# Render chat history + feedback buttons
+# Render chat history with feedback
 # -----------------------
 for i, message in enumerate(st.session_state.history):
     with st.chat_message("user"):
         st.markdown(message["query"])
     with st.chat_message("assistant"):
         st.markdown(message["response"])
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("👍 Helpful", key=f"up_{i}"):
-                st.session_state.history[i]["feedback"] = "helpful"
-                st.success("Feedback recorded!")
-        with col2:
-            if st.button("👎 Not Helpful", key=f"down_{i}"):
-                st.session_state.history[i]["feedback"] = "not_helpful"
-                st.error("Feedback recorded!")
+
+        if not message["feedback_requested"]:
+            if st.button("✅ I'm done with my questions", key=f"done_{i}"):
+                st.session_state.history[i]["feedback_requested"] = True
+
+        if message["feedback_requested"]:
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("👍 Helpful", key=f"up_{i}"):
+                    st.session_state.history[i]["feedback"] = "helpful"
+                    st.success("Feedback recorded!")
+            with col2:
+                if st.button("👎 Not Helpful", key=f"down_{i}"):
+                    st.session_state.history[i]["feedback"] = "not_helpful"
+                    st.error("Feedback recorded!")
 
 # -----------------------
-# Save feedback
+# Save feedback to file
 # -----------------------
 def save_feedback():
     with open("feedback.json", "w", encoding="utf-8") as f:
