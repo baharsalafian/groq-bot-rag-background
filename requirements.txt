@@ -5,3 +5,5 @@ PyPDF2
 unstructured
 faiss-cpu
 sentence-transformers
+scholarly==1.5.0
+
